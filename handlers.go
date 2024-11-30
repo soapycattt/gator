@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -131,15 +132,97 @@ func handlerList(s *state, cmd command) error {
 	return nil
 }
 
-func handlerAgg(s *state, cmd command) error {
-	url := "https://www.wagslane.dev/index.xml"
-	rssFeed, err := rss.FetchFeed(context.Background(), url)
+func scrapeFeed(s *state) error {
+	feeds, err := s.db.GetNextFeedToFetch(context.Background())
 	if err != nil {
 		return err
 	}
 
-	for _, item := range rssFeed.Channel.Item {
-		fmt.Println(" - " + item.Title)
+	// var rssFeed *rss.RSSFeed
+	for _, feed := range feeds {
+		rssFeed, err := rss.FetchFeed(context.Background(), feed.Url.String)
+		if err != nil {
+			return err
+		}
+
+		err = s.db.MarkFeedFetched(context.Background(), feed.ID)
+		if err != nil {
+			return err
+		}
+
+		for _, item := range rssFeed.Channel.Item {
+			// fmt.Println(" - " + item.Title)
+			pubTS, err := time.Parse(time.RFC1123Z, item.PubDate)
+			if err != nil {
+				return err
+			}
+
+			_, err = s.db.CreatePost(
+				context.Background(),
+				database.CreatePostParams{
+					ID:          uuid.New(),
+					CreatedAt:   sql.NullTime{time.Now(), true},
+					UpdatedAt:   sql.NullTime{time.Now(), true},
+					PublishedAt: sql.NullTime{pubTS, true},
+					Title:       sql.NullString{item.Title, true},
+					Url:         sql.NullString{item.Link, true},
+					FeedID:      uuid.NullUUID{feed.ID, true},
+					Description: sql.NullString{item.Description, true},
+				},
+			)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func handlerAgg(s *state, cmd command) error {
+	if len(cmd.args) == 0 {
+		return fmt.Errorf("no time duration is provided")
+	}
+	timeBetweenRequests, err := time.ParseDuration(cmd.args[0])
+	if err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(timeBetweenRequests)
+
+	for ; ; <-ticker.C {
+		fmt.Printf("Scraping feeds with interval %v\n", timeBetweenRequests)
+		err := scrapeFeed(s)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	limit := 2
+
+	if len(cmd.args) > 0 {
+		if parsedLimit, err := strconv.Atoi(cmd.args[0]); err == nil {
+			limit = parsedLimit
+		} else {
+			return err
+		}
+	}
+
+	posts, err := s.db.GetPostsForUser(
+		context.Background(),
+		database.GetPostsForUserParams{
+			UserID: uuid.NullUUID{user.ID, true},
+			Limit:  int32(limit),
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	for _, post := range posts {
+		fmt.Printf("- %s\n", post.Title.String)
 	}
 
 	return nil
@@ -168,9 +251,8 @@ func handlerAddFeed(s *state, cmd command, user database.User) error {
 			CreatedAt: sql.NullTime{time.Now(), true},
 			UpdatedAt: sql.NullTime{time.Now(), true},
 			Name:      sql.NullString{rssFeed.Channel.Title, true},
-			Url:       sql.NullString{rssFeed.Channel.Link, true},
+			Url:       sql.NullString{feedURL, true},
 			UserID:    uuid.NullUUID{user.ID, true},
-			RssUrl:    sql.NullString{feedURL, true},
 		},
 	)
 	if err != nil {

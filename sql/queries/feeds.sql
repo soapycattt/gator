@@ -5,8 +5,7 @@ INSERT INTO feeds (
     updated_at,
     name,
     url,
-    user_id,
-    rss_url
+    user_id
 )
 
 VALUES (
@@ -15,8 +14,7 @@ VALUES (
     $3,
     $4,
     $5,
-    $6,
-    $7
+    $6
 )
 RETURNING *;
 
@@ -37,4 +35,15 @@ DELETE FROM feeds;
 
 
 -- name: GetFeedByURL :one
-SELECT * FROM feeds WHERE rss_url = $1;
+SELECT * FROM feeds WHERE url = $1;
+
+
+-- name: MarkFeedFetched :exec
+UPDATE feeds
+SET last_fetched_at = CURRENT_TIMESTAMP
+WHERE id = $1;
+
+-- name: GetNextFeedToFetch :many
+SELECT *
+FROM feeds 
+ORDER BY last_fetched_at DESC NULLS FIRST;

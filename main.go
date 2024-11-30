@@ -46,6 +46,7 @@ func main() {
 	c.register("follow", handlerFollow)
 	c.register("following", handlerFollowing)
 	c.register("unfollow", middlewareLoggedIn(handlerUnfollow))
+	c.register("browse", middlewareLoggedIn(handlerBrowse))
 
 	// Get inputArgs
 	inputArgs := os.Args
